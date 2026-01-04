@@ -65,9 +65,6 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   if (body.response_content_type !== undefined) updateData.response_content_type = body.response_content_type;
   if (body.response_headers !== undefined) updateData.response_headers = body.response_headers;
   if (body.response_body !== undefined) updateData.response_body = body.response_body;
-  if (body.capture_headers !== undefined) updateData.capture_headers = body.capture_headers;
-  if (body.capture_body !== undefined) updateData.capture_body = body.capture_body;
-  if (body.capture_body_max_bytes !== undefined) updateData.capture_body_max_bytes = body.capture_body_max_bytes;
   if (body.forward_enabled !== undefined) updateData.forward_enabled = body.forward_enabled;
   if (body.forward_url !== undefined) updateData.forward_url = body.forward_url;
   if (body.forward_timeout_ms !== undefined) updateData.forward_timeout_ms = body.forward_timeout_ms;

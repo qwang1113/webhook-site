@@ -89,6 +89,46 @@ export default function EndpointPage({ params }: PageProps) {
     }
   }
 
+  function tryParseAndFormatJson(str: string): string {
+    try {
+      const parsed = JSON.parse(str);
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      return str;
+    }
+  }
+
+  async function deleteRequest(requestId: number) {
+    if (!manageKey) return;
+    try {
+      const res = await fetch(`/api/endpoints/${id}/requests?key=${manageKey}&request_id=${requestId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setRequests(prev => prev.filter(r => r.id !== requestId));
+        if (selectedRequest?.id === requestId) {
+          setSelectedRequest(null);
+        }
+      }
+    } catch {
+    }
+  }
+
+  async function deleteAllRequests() {
+    if (!manageKey) return;
+    if (!confirm('Delete all requests?')) return;
+    try {
+      const res = await fetch(`/api/endpoints/${id}/requests?key=${manageKey}&all=true`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setRequests([]);
+        setSelectedRequest(null);
+      }
+    } catch {
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -149,10 +189,18 @@ export default function EndpointPage({ params }: PageProps) {
 
       <div className="flex-1 flex overflow-hidden">
         <aside className="w-80 flex-shrink-0 border-r border-foreground/10 flex flex-col">
-          <div className="px-4 py-3 border-b border-foreground/10 flex-shrink-0">
+          <div className="px-4 py-3 border-b border-foreground/10 flex-shrink-0 flex items-center justify-between">
             <h2 className="text-sm font-medium text-foreground/70">
               Requests ({requests.length})
             </h2>
+            {manageKey && requests.length > 0 && (
+              <button
+                onClick={deleteAllRequests}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors"
+              >
+                Clear All
+              </button>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto scrollbar-thin">
             {requests.length === 0 ? (
@@ -196,13 +244,21 @@ export default function EndpointPage({ params }: PageProps) {
         </aside>
 
         <section className="flex-1 flex flex-col overflow-hidden">
-          <div className="px-6 py-3 border-b border-foreground/10 flex-shrink-0">
+          <div className="px-6 py-3 border-b border-foreground/10 flex-shrink-0 flex items-center justify-between">
             <h2 className="text-sm font-medium text-foreground/70">Request Details</h2>
+            {manageKey && selectedRequest && (
+              <button
+                onClick={() => deleteRequest(selectedRequest.id)}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors"
+              >
+                Delete
+              </button>
+            )}
           </div>
           
           {selectedRequest ? (
             <div className="flex-1 overflow-y-auto scrollbar-thin p-6">
-              <div className="space-y-6 max-w-4xl">
+              <div className="space-y-6">
                 <section>
                   <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">General</h3>
                   <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
@@ -247,18 +303,18 @@ export default function EndpointPage({ params }: PageProps) {
                   </section>
                 )}
 
-                {selectedRequest.body_preview && (
+                {selectedRequest.body && (
                   <section>
                     <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">
                       Body
-                      {selectedRequest.body_truncated && (
-                        <span className="ml-2 text-amber-500 normal-case">
-                          (truncated, {selectedRequest.body_size} bytes total)
+                      {selectedRequest.body_size && (
+                        <span className="ml-2 text-foreground/40 normal-case">
+                          ({selectedRequest.body_size} bytes)
                         </span>
                       )}
                     </h3>
-                    <pre className="text-sm bg-foreground/5 p-4 rounded-lg overflow-x-auto whitespace-pre-wrap break-all">
-                      {decodeBody(selectedRequest.body_preview)}
+                    <pre className="text-sm bg-foreground/5 p-4 rounded-lg overflow-x-auto whitespace-pre-wrap break-all font-mono">
+                      {tryParseAndFormatJson(decodeBody(selectedRequest.body))}
                     </pre>
                   </section>
                 )}

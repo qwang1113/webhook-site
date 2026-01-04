@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase';
+import { verifyManageKey } from '@/lib/crypto';
 import type { ListRequestsResponse, WebhookRequest } from '@/types/database';
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -66,4 +67,62 @@ export async function GET(request: Request, { params }: RouteParams) {
   };
   
   return NextResponse.json(response);
+}
+
+export async function DELETE(request: Request, { params }: RouteParams) {
+  const { id } = await params;
+  const url = new URL(request.url);
+  const key = url.searchParams.get('key');
+  const requestId = url.searchParams.get('request_id');
+  const deleteAll = url.searchParams.get('all') === 'true';
+  
+  if (!key) {
+    return NextResponse.json({ error: 'Missing manage key' }, { status: 401 });
+  }
+  
+  const supabase = getServerClient();
+  
+  const { data: endpoint, error: endpointError } = await supabase
+    .from('webhook_endpoints')
+    .select('manage_key_hash')
+    .eq('id', id)
+    .single();
+  
+  if (endpointError || !endpoint) {
+    return NextResponse.json({ error: 'Endpoint not found' }, { status: 404 });
+  }
+  
+  const isValid = await verifyManageKey(key, endpoint.manage_key_hash);
+  if (!isValid) {
+    return NextResponse.json({ error: 'Invalid manage key' }, { status: 403 });
+  }
+  
+  if (deleteAll) {
+    const { error } = await supabase
+      .from('webhook_requests')
+      .delete()
+      .eq('endpoint_id', id);
+    
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    
+    return NextResponse.json({ deleted: 'all' });
+  }
+  
+  if (!requestId) {
+    return NextResponse.json({ error: 'Missing request_id or all=true' }, { status: 400 });
+  }
+  
+  const { error } = await supabase
+    .from('webhook_requests')
+    .delete()
+    .eq('id', parseInt(requestId, 10))
+    .eq('endpoint_id', id);
+  
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  
+  return NextResponse.json({ deleted: requestId });
 }

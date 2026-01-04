@@ -20,9 +20,7 @@ export interface Database {
           response_content_type: string
           response_headers: Json
           response_body: string
-          capture_headers: boolean
-          capture_body: boolean
-          capture_body_max_bytes: number
+
           forward_enabled: boolean
           forward_url: string | null
           forward_timeout_ms: number
@@ -38,9 +36,6 @@ export interface Database {
           response_content_type?: string
           response_headers?: Json
           response_body?: string
-          capture_headers?: boolean
-          capture_body?: boolean
-          capture_body_max_bytes?: number
           forward_enabled?: boolean
           forward_url?: string | null
           forward_timeout_ms?: number
@@ -56,9 +51,6 @@ export interface Database {
           response_content_type?: string
           response_headers?: Json
           response_body?: string
-          capture_headers?: boolean
-          capture_body?: boolean
-          capture_body_max_bytes?: number
           forward_enabled?: boolean
           forward_url?: string | null
           forward_timeout_ms?: number
@@ -79,9 +71,8 @@ export interface Database {
           content_type: string | null
           content_length: number | null
           headers: Json | null
-          body_preview: string | null
+          body: string | null
           body_size: number | null
-          body_truncated: boolean
           body_sha256: string | null
         }
         Insert: {
@@ -96,9 +87,8 @@ export interface Database {
           content_type?: string | null
           content_length?: number | null
           headers?: Json | null
-          body_preview?: string | null
+          body?: string | null
           body_size?: number | null
-          body_truncated?: boolean
           body_sha256?: string | null
         }
         Update: {
@@ -113,9 +103,8 @@ export interface Database {
           content_type?: string | null
           content_length?: number | null
           headers?: Json | null
-          body_preview?: string | null
+          body?: string | null
           body_size?: number | null
-          body_truncated?: boolean
           body_sha256?: string | null
         }
         Relationships: [

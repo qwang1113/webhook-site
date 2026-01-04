@@ -12,9 +12,7 @@ create table if not exists webhook_endpoints (
   response_headers jsonb not null default '{}'::jsonb,
   response_body text not null default 'OK',
 
-  capture_headers boolean not null default true,
-  capture_body boolean not null default true,
-  capture_body_max_bytes integer not null default 8192,
+
 
   forward_enabled boolean not null default false,
   forward_url text,
@@ -40,9 +38,8 @@ create table if not exists webhook_requests (
   content_length integer,
 
   headers jsonb,
-  body_preview text,
+  body text,
   body_size integer,
-  body_truncated boolean not null default false,
   body_sha256 text
 );
 

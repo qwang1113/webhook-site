@@ -54,9 +54,9 @@ export async function forwardRequest(
     
     try {
       let body: ArrayBuffer | null = null;
-      if (captured.rawBody) {
-        body = new ArrayBuffer(captured.rawBody.length);
-        new Uint8Array(body).set(captured.rawBody);
+      if (captured.body) {
+        body = new ArrayBuffer(captured.body.length);
+        new Uint8Array(body).set(captured.body);
       }
       
       const response = await fetch(targetUrl, {

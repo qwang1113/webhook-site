@@ -29,7 +29,7 @@ async function handleWebhook(request: Request, { params }: RouteParams) {
     return new Response('Webhook paused', { status: 410 });
   }
   
-  const captured = await captureRequest(request, config.capture_body_max_bytes);
+  const captured = await captureRequest(request);
   
   const insertData: RequestInsert = {
     endpoint_id: id,
@@ -41,12 +41,9 @@ async function handleWebhook(request: Request, { params }: RouteParams) {
     content_type: captured.contentType,
     content_length: captured.contentLength,
     body_size: captured.bodySize,
-    body_truncated: captured.bodyTruncated,
     body_sha256: captured.bodySha256,
-    headers: config.capture_headers ? captured.headers : null,
-    body_preview: config.capture_body && captured.bodyPreview 
-      ? uint8ArrayToBase64(captured.bodyPreview) 
-      : null,
+    headers: captured.headers,
+    body: captured.body ? uint8ArrayToBase64(captured.body) : null,
   };
   
   const { data: requestRecord, error: insertError } = await supabase

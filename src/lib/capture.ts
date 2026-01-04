@@ -1,19 +1,9 @@
 import { sha256Hex } from './crypto';
 import type { HttpMethod } from '@/types/database';
 
-const DEFAULT_CAPTURE_MAX_BYTES = 8192;
 
-// SECURITY: Exclude sensitive headers from capture to prevent credential leaks
-const EXCLUDED_HEADERS = new Set([
-  'cookie',
-  'authorization',
-  'x-vercel-proxy-signature',
-  'x-vercel-proxy-signature-ts',
-  'x-real-ip',
-  'x-vercel-forwarded-for',
-  'x-vercel-deployment-url',
-  'x-vercel-id',
-]);
+
+
 
 export interface CapturedRequest {
   method: HttpMethod;
@@ -24,11 +14,9 @@ export interface CapturedRequest {
   contentType: string | null;
   contentLength: number | null;
   headers: Record<string, string>;
-  bodyPreview: Uint8Array | null;
+  body: Uint8Array | null;
   bodySize: number;
-  bodyTruncated: boolean;
   bodySha256: string | null;
-  rawBody: Uint8Array | null;
 }
 
 function parseClientIp(headers: Headers): string | null {
@@ -59,18 +47,12 @@ function parseQuery(url: URL): Record<string, string | string[]> {
 function captureHeaders(headers: Headers): Record<string, string> {
   const result: Record<string, string> = {};
   headers.forEach((value, key) => {
-    const lowerKey = key.toLowerCase();
-    if (!EXCLUDED_HEADERS.has(lowerKey) && value.length <= 8192) {
-      result[lowerKey] = value;
-    }
+    result[key.toLowerCase()] = value;
   });
   return result;
 }
 
-export async function captureRequest(
-  request: Request,
-  captureBodyMaxBytes: number = DEFAULT_CAPTURE_MAX_BYTES
-): Promise<CapturedRequest> {
+export async function captureRequest(request: Request): Promise<CapturedRequest> {
   const url = new URL(request.url);
   const method = request.method.toUpperCase() as HttpMethod;
   
@@ -82,28 +64,18 @@ export async function captureRequest(
   
   const headers = captureHeaders(request.headers);
   
-  let rawBody: Uint8Array | null = null;
-  let bodyPreview: Uint8Array | null = null;
+  let body: Uint8Array | null = null;
   let bodySize = 0;
-  let bodyTruncated = false;
   let bodySha256: string | null = null;
   
   if (request.body && method !== 'GET' && method !== 'HEAD') {
     try {
       const arrayBuffer = await request.arrayBuffer();
-      rawBody = new Uint8Array(arrayBuffer);
-      bodySize = rawBody.length;
+      body = new Uint8Array(arrayBuffer);
+      bodySize = body.length;
       
       if (bodySize > 0) {
-        bodySha256 = await sha256Hex(rawBody);
-        
-        if (bodySize > captureBodyMaxBytes) {
-          bodyPreview = rawBody.slice(0, captureBodyMaxBytes);
-          bodyTruncated = true;
-        } else {
-          bodyPreview = rawBody;
-          bodyTruncated = false;
-        }
+        bodySha256 = await sha256Hex(body);
       }
     } catch {
     }
@@ -118,11 +90,9 @@ export async function captureRequest(
     contentType,
     contentLength,
     headers,
-    bodyPreview,
+    body,
     bodySize,
-    bodyTruncated,
     bodySha256,
-    rawBody,
   };
 }
 
