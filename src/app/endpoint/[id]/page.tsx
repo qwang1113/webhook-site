@@ -129,6 +129,26 @@ export default function EndpointPage({ params }: PageProps) {
     }
   }
 
+  const [forwarding, setForwarding] = useState(false);
+  const [forwardResult, setForwardResult] = useState<{ ok: boolean; status: number | null; error?: string } | null>(null);
+
+  async function forwardRequest(requestId: number) {
+    if (!manageKey) return;
+    setForwarding(true);
+    setForwardResult(null);
+    try {
+      const res = await fetch(`/api/endpoints/${id}/requests/${requestId}/forward?key=${manageKey}`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      setForwardResult(data);
+    } catch {
+      setForwardResult({ ok: false, status: null, error: 'Network error' });
+    } finally {
+      setForwarding(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -247,18 +267,36 @@ export default function EndpointPage({ params }: PageProps) {
           <div className="px-6 py-3 border-b border-foreground/10 flex-shrink-0 flex items-center justify-between">
             <h2 className="text-sm font-medium text-foreground/70">Request Details</h2>
             {manageKey && selectedRequest && (
-              <button
-                onClick={() => deleteRequest(selectedRequest.id)}
-                className="text-xs text-red-400 hover:text-red-300 transition-colors"
-              >
-                Delete
-              </button>
+              <div className="flex items-center gap-3">
+                {endpoint.forward_enabled && endpoint.forward_url && (
+                  <button
+                    onClick={() => forwardRequest(selectedRequest.id)}
+                    disabled={forwarding}
+                    className="text-xs text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50"
+                  >
+                    {forwarding ? 'Forwarding...' : 'Forward'}
+                  </button>
+                )}
+                <button
+                  onClick={() => deleteRequest(selectedRequest.id)}
+                  className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
             )}
           </div>
           
           {selectedRequest ? (
             <div className="flex-1 overflow-y-auto scrollbar-thin p-6">
               <div className="space-y-6">
+                {forwardResult && (
+                  <div className={`p-3 rounded-lg text-sm ${forwardResult.ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                    {forwardResult.ok 
+                      ? `Forwarded successfully (${forwardResult.status})` 
+                      : `Forward failed: ${forwardResult.error || `Status ${forwardResult.status}`}`}
+                  </div>
+                )}
                 <section>
                   <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">General</h3>
                   <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
