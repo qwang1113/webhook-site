@@ -3,15 +3,15 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 
 export interface WebhookEndpoint {
   id: string;
   created_at: string;
-  manage_key_hash: string;
+  user_id: string;
   name: string | null;
   paused: boolean;
-  
+
   response_status: number;
   response_content_type: string;
   response_headers: Record<string, string>;
   response_body: string;
-  
+
   forward_enabled: boolean;
   forward_url: string | null;
   forward_timeout_ms: number;
@@ -22,18 +22,18 @@ export interface WebhookRequest {
   id: number;
   endpoint_id: string;
   received_at: string;
-  
+
   method: HttpMethod;
   path: string;
   query: Record<string, string | string[]>;
-  
+
   client_ip: string | null;
   user_agent: string | null;
   content_type: string | null;
   content_length: number | null;
-  
+
   headers: Record<string, string> | null;
-  
+
   body: string | null;
   body_size: number | null;
   body_sha256: string | null;
@@ -43,7 +43,7 @@ export interface WebhookForward {
   id: number;
   request_id: number;
   endpoint_id: string;
-  
+
   target_url: string;
   started_at: string;
   finished_at: string | null;
@@ -61,7 +61,6 @@ export interface CreateEndpointRequest {
 export interface CreateEndpointResponse {
   endpoint_id: string;
   hook_url: string;
-  manage_key: string;
   manage_url: string;
 }
 

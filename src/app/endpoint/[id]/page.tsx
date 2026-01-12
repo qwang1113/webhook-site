@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState, useCallback, use } from 'react';
+import Link from 'next/link';
+import { base64ToUint8Array } from '@/lib/capture';
 import type { WebhookEndpoint, WebhookRequest, ListRequestsResponse } from '@/types/database';
 
 interface PageProps {
@@ -9,12 +11,11 @@ interface PageProps {
 
 export default function EndpointPage({ params }: PageProps) {
   const { id } = use(params);
-  const [endpoint, setEndpoint] = useState<Omit<WebhookEndpoint, 'manage_key_hash'> | null>(null);
+  const [endpoint, setEndpoint] = useState<Omit<WebhookEndpoint, 'user_id'> | null>(null);
   const [requests, setRequests] = useState<WebhookRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<WebhookRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [manageKey, setManageKey] = useState<string | null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
 
@@ -26,16 +27,11 @@ export default function EndpointPage({ params }: PageProps) {
         setRequests(data.items);
       }
     } catch {
+      // Silently ignore
     }
   }, [id]);
 
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const key = urlParams.get('key');
-    if (key) {
-      setManageKey(key);
-    }
-
     async function fetchEndpoint() {
       try {
         const res = await fetch(`/api/endpoints/${id}`);
@@ -99,26 +95,25 @@ export default function EndpointPage({ params }: PageProps) {
   }
 
   async function deleteRequest(requestId: number) {
-    if (!manageKey) return;
     try {
-      const res = await fetch(`/api/endpoints/${id}/requests?key=${manageKey}&request_id=${requestId}`, {
+      const res = await fetch(`/api/endpoints/${id}/requests?request_id=${requestId}`, {
         method: 'DELETE',
       });
       if (res.ok) {
-        setRequests(prev => prev.filter(r => r.id !== requestId));
+        setRequests((prev) => prev.filter((r) => r.id !== requestId));
         if (selectedRequest?.id === requestId) {
           setSelectedRequest(null);
         }
       }
     } catch {
+      // Silently ignore
     }
   }
 
   async function deleteAllRequests() {
-    if (!manageKey) return;
     if (!confirm('Delete all requests?')) return;
     try {
-      const res = await fetch(`/api/endpoints/${id}/requests?key=${manageKey}&all=true`, {
+      const res = await fetch(`/api/endpoints/${id}/requests?all=true`, {
         method: 'DELETE',
       });
       if (res.ok) {
@@ -126,24 +121,119 @@ export default function EndpointPage({ params }: PageProps) {
         setSelectedRequest(null);
       }
     } catch {
+      // Silently ignore
     }
   }
 
+  // Frontend forwarding
   const [forwarding, setForwarding] = useState(false);
-  const [forwardResult, setForwardResult] = useState<{ ok: boolean; status: number | null; error?: string } | null>(null);
+  const [forwardResult, setForwardResult] = useState<{
+    ok: boolean;
+    status: number | null;
+    error?: string;
+  } | null>(null);
 
-  async function forwardRequest(requestId: number) {
-    if (!manageKey) return;
+  async function forwardRequestFromClient(req: WebhookRequest) {
+    if (!endpoint?.forward_url) return;
+
     setForwarding(true);
     setForwardResult(null);
+
+    const startTime = Date.now();
+
     try {
-      const res = await fetch(`/api/endpoints/${id}/requests/${requestId}/forward?key=${manageKey}`, {
-        method: 'POST',
+      // Build headers (skip hop-by-hop headers)
+      const skipHeaders = new Set([
+        'connection',
+        'keep-alive',
+        'host',
+        'transfer-encoding',
+        'proxy-authenticate',
+        'proxy-authorization',
+        'te',
+        'trailers',
+        'upgrade',
+      ]);
+
+      const headers = new Headers();
+      if (req.headers) {
+        for (const [key, value] of Object.entries(req.headers as Record<string, string>)) {
+          if (!skipHeaders.has(key.toLowerCase())) {
+            headers.set(key, value);
+          }
+        }
+      }
+
+      // Add custom forward headers
+      if (endpoint.forward_add_headers) {
+        for (const [key, value] of Object.entries(
+          endpoint.forward_add_headers as Record<string, string>
+        )) {
+          headers.set(key, value);
+        }
+      }
+
+      // Build body
+      let body: ArrayBuffer | null = null;
+      if (req.body) {
+        const bytes = base64ToUint8Array(req.body);
+        body = bytes.buffer as ArrayBuffer;
+      }
+
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutMs = endpoint.forward_timeout_ms || 10000;
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const response = await fetch(endpoint.forward_url, {
+        method: req.method,
+        headers,
+        body,
+        signal: controller.signal,
+        mode: 'cors',
       });
-      const data = await res.json();
-      setForwardResult(data);
-    } catch {
-      setForwardResult({ ok: false, status: null, error: 'Network error' });
+
+      clearTimeout(timeoutId);
+      const durationMs = Date.now() - startTime;
+
+      setForwardResult({
+        ok: response.ok,
+        status: response.status,
+      });
+
+      console.log(`Forward completed in ${durationMs}ms, status: ${response.status}`);
+    } catch (err) {
+      const durationMs = Date.now() - startTime;
+
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          setForwardResult({
+            ok: false,
+            status: null,
+            error: `Timeout after ${endpoint.forward_timeout_ms || 10000}ms`,
+          });
+        } else if (err.message.includes('CORS') || err.message.includes('cross-origin')) {
+          setForwardResult({
+            ok: false,
+            status: null,
+            error: 'CORS error - ensure your target server allows cross-origin requests',
+          });
+        } else {
+          setForwardResult({
+            ok: false,
+            status: null,
+            error: err.message,
+          });
+        }
+      } else {
+        setForwardResult({
+          ok: false,
+          status: null,
+          error: 'Network error',
+        });
+      }
+
+      console.error(`Forward failed after ${durationMs}ms:`, err);
     } finally {
       setForwarding(false);
     }
@@ -160,51 +250,62 @@ export default function EndpointPage({ params }: PageProps) {
   if (error || !endpoint) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <p className="text-red-500">{error || 'Endpoint not found'}</p>
+        <div className="text-center">
+          <p className="text-red-500 mb-4">{error || 'Endpoint not found'}</p>
+          <Link href="/" className="text-blue-400 hover:underline">
+            Back to Dashboard
+          </Link>
+        </div>
       </div>
     );
   }
 
-  const hookUrl = `${window.location.origin}/api/hook/${id}`;
+  const hookUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/api/hook/${id}`;
 
   return (
     <main className="h-screen bg-background flex flex-col overflow-hidden">
       <header className="flex-shrink-0 border-b border-foreground/10 px-6 py-4">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-xl font-semibold truncate">
-            {endpoint.name || 'Webhook Endpoint'}
-          </h1>
-          
-          <div className="flex items-center gap-3 flex-shrink-0">
-            {manageKey && (
-              <button
-                onClick={() => setShowConfig(!showConfig)}
-                className="px-3 py-1.5 text-sm bg-foreground/10 rounded-md hover:bg-foreground/15 transition-colors"
-              >
-                {showConfig ? 'Hide Settings' : 'Settings'}
-              </button>
-            )}
+          <div className="flex items-center gap-4 min-w-0">
+            <Link
+              href="/"
+              className="text-foreground/50 hover:text-foreground transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
+              </svg>
+            </Link>
+            <h1 className="text-xl font-semibold truncate">
+              {endpoint.name || 'Webhook Endpoint'}
+            </h1>
           </div>
+
+          <button
+            onClick={() => setShowConfig(!showConfig)}
+            className="px-3 py-1.5 text-sm bg-foreground/10 rounded-md hover:bg-foreground/15 transition-colors"
+          >
+            {showConfig ? 'Hide Settings' : 'Settings'}
+          </button>
         </div>
-        
+
         <div className="flex items-center gap-2 mt-3 bg-foreground/5 px-3 py-2 rounded-md">
           <code className="flex-1 text-sm truncate">{hookUrl}</code>
           <button
             onClick={() => copyToClipboard(hookUrl)}
             className="flex-shrink-0 px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
           >
-            {copySuccess ? '✓ Copied' : 'Copy'}
+            {copySuccess ? 'Copied!' : 'Copy'}
           </button>
         </div>
       </header>
 
-      {showConfig && manageKey && (
-        <ConfigPanel
-          endpoint={endpoint}
-          endpointId={id}
-          manageKey={manageKey}
-          onUpdate={setEndpoint}
-        />
+      {showConfig && (
+        <ConfigPanel endpoint={endpoint} endpointId={id} onUpdate={setEndpoint} />
       )}
 
       <div className="flex-1 flex overflow-hidden">
@@ -213,7 +314,7 @@ export default function EndpointPage({ params }: PageProps) {
             <h2 className="text-sm font-medium text-foreground/70">
               Requests ({requests.length})
             </h2>
-            {manageKey && requests.length > 0 && (
+            {requests.length > 0 && (
               <button
                 onClick={deleteAllRequests}
                 className="text-xs text-red-400 hover:text-red-300 transition-colors"
@@ -232,7 +333,10 @@ export default function EndpointPage({ params }: PageProps) {
                 {requests.map((req) => (
                   <button
                     key={req.id}
-                    onClick={() => setSelectedRequest(req)}
+                    onClick={() => {
+                      setSelectedRequest(req);
+                      setForwardResult(null);
+                    }}
                     className={`w-full text-left px-3 py-2 rounded-md transition-colors ${
                       selectedRequest?.id === req.id
                         ? 'bg-blue-600/20 ring-1 ring-blue-500/50'
@@ -240,18 +344,22 @@ export default function EndpointPage({ params }: PageProps) {
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <span className={`px-1.5 py-0.5 text-xs font-medium rounded ${
-                        req.method === 'GET' ? 'bg-emerald-500/20 text-emerald-400' :
-                        req.method === 'POST' ? 'bg-blue-500/20 text-blue-400' :
-                        req.method === 'PUT' ? 'bg-amber-500/20 text-amber-400' :
-                        req.method === 'DELETE' ? 'bg-red-500/20 text-red-400' :
-                        'bg-gray-500/20 text-gray-400'
-                      }`}>
+                      <span
+                        className={`px-1.5 py-0.5 text-xs font-medium rounded ${
+                          req.method === 'GET'
+                            ? 'bg-emerald-500/20 text-emerald-400'
+                            : req.method === 'POST'
+                            ? 'bg-blue-500/20 text-blue-400'
+                            : req.method === 'PUT'
+                            ? 'bg-amber-500/20 text-amber-400'
+                            : req.method === 'DELETE'
+                            ? 'bg-red-500/20 text-red-400'
+                            : 'bg-gray-500/20 text-gray-400'
+                        }`}
+                      >
                         {req.method}
                       </span>
-                      <span className="text-sm truncate flex-1 font-mono">
-                        {req.path}
-                      </span>
+                      <span className="text-sm truncate flex-1 font-mono">{req.path}</span>
                     </div>
                     <div className="text-xs text-foreground/40 mt-1">
                       {formatDate(req.received_at)}
@@ -266,11 +374,11 @@ export default function EndpointPage({ params }: PageProps) {
         <section className="flex-1 flex flex-col overflow-hidden">
           <div className="px-6 py-3 border-b border-foreground/10 flex-shrink-0 flex items-center justify-between">
             <h2 className="text-sm font-medium text-foreground/70">Request Details</h2>
-            {manageKey && selectedRequest && (
+            {selectedRequest && (
               <div className="flex items-center gap-3">
                 {endpoint.forward_enabled && endpoint.forward_url && (
                   <button
-                    onClick={() => forwardRequest(selectedRequest.id)}
+                    onClick={() => forwardRequestFromClient(selectedRequest)}
                     disabled={forwarding}
                     className="text-xs text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50"
                   >
@@ -286,19 +394,27 @@ export default function EndpointPage({ params }: PageProps) {
               </div>
             )}
           </div>
-          
+
           {selectedRequest ? (
             <div className="flex-1 overflow-y-auto scrollbar-thin p-6">
               <div className="space-y-6">
                 {forwardResult && (
-                  <div className={`p-3 rounded-lg text-sm ${forwardResult.ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-                    {forwardResult.ok 
-                      ? `Forwarded successfully (${forwardResult.status})` 
+                  <div
+                    className={`p-3 rounded-lg text-sm ${
+                      forwardResult.ok
+                        ? 'bg-emerald-500/10 text-emerald-400'
+                        : 'bg-red-500/10 text-red-400'
+                    }`}
+                  >
+                    {forwardResult.ok
+                      ? `Forwarded successfully (${forwardResult.status})`
                       : `Forward failed: ${forwardResult.error || `Status ${forwardResult.status}`}`}
                   </div>
                 )}
                 <section>
-                  <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">General</h3>
+                  <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">
+                    General
+                  </h3>
                   <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
                     <div className="flex">
                       <span className="w-28 text-foreground/50">Method</span>
@@ -314,7 +430,9 @@ export default function EndpointPage({ params }: PageProps) {
                     </div>
                     <div className="flex">
                       <span className="w-28 text-foreground/50">Content-Type</span>
-                      <span className="font-mono text-xs">{selectedRequest.content_type || '-'}</span>
+                      <span className="font-mono text-xs">
+                        {selectedRequest.content_type || '-'}
+                      </span>
                     </div>
                     <div className="flex col-span-2">
                       <span className="w-28 text-foreground/50">Time</span>
@@ -323,23 +441,29 @@ export default function EndpointPage({ params }: PageProps) {
                   </div>
                 </section>
 
-                {selectedRequest.query && Object.keys(selectedRequest.query).length > 0 && (
-                  <section>
-                    <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">Query Parameters</h3>
-                    <pre className="text-sm bg-foreground/5 p-4 rounded-lg overflow-x-auto">
-                      {formatJson(selectedRequest.query)}
-                    </pre>
-                  </section>
-                )}
+                {selectedRequest.query &&
+                  Object.keys(selectedRequest.query as object).length > 0 && (
+                    <section>
+                      <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">
+                        Query Parameters
+                      </h3>
+                      <pre className="text-sm bg-foreground/5 p-4 rounded-lg overflow-x-auto">
+                        {formatJson(selectedRequest.query)}
+                      </pre>
+                    </section>
+                  )}
 
-                {selectedRequest.headers && Object.keys(selectedRequest.headers).length > 0 && (
-                  <section>
-                    <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">Headers</h3>
-                    <pre className="text-sm bg-foreground/5 p-4 rounded-lg overflow-x-auto">
-                      {formatJson(selectedRequest.headers)}
-                    </pre>
-                  </section>
-                )}
+                {selectedRequest.headers &&
+                  Object.keys(selectedRequest.headers as object).length > 0 && (
+                    <section>
+                      <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide mb-3">
+                        Headers
+                      </h3>
+                      <pre className="text-sm bg-foreground/5 p-4 rounded-lg overflow-x-auto">
+                        {formatJson(selectedRequest.headers)}
+                      </pre>
+                    </section>
+                  )}
 
                 {selectedRequest.body && (
                   <section>
@@ -370,15 +494,15 @@ export default function EndpointPage({ params }: PageProps) {
 }
 
 interface ConfigPanelProps {
-  endpoint: Omit<WebhookEndpoint, 'manage_key_hash'>;
+  endpoint: Omit<WebhookEndpoint, 'user_id'>;
   endpointId: string;
-  manageKey: string;
-  onUpdate: (endpoint: Omit<WebhookEndpoint, 'manage_key_hash'>) => void;
+  onUpdate: (endpoint: Omit<WebhookEndpoint, 'user_id'>) => void;
 }
 
-function ConfigPanel({ endpoint, endpointId, manageKey, onUpdate }: ConfigPanelProps) {
+function ConfigPanel({ endpoint, endpointId, onUpdate }: ConfigPanelProps) {
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState({
+    name: endpoint.name || '',
     response_status: endpoint.response_status,
     response_body: endpoint.response_body,
     response_content_type: endpoint.response_content_type,
@@ -390,7 +514,7 @@ function ConfigPanel({ endpoint, endpointId, manageKey, onUpdate }: ConfigPanelP
   async function saveConfig() {
     setSaving(true);
     try {
-      const res = await fetch(`/api/endpoints/${endpointId}?key=${manageKey}`, {
+      const res = await fetch(`/api/endpoints/${endpointId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -400,6 +524,7 @@ function ConfigPanel({ endpoint, endpointId, manageKey, onUpdate }: ConfigPanelP
         onUpdate(updated);
       }
     } catch {
+      // Silently ignore
     } finally {
       setSaving(false);
     }
@@ -407,22 +532,32 @@ function ConfigPanel({ endpoint, endpointId, manageKey, onUpdate }: ConfigPanelP
 
   return (
     <div className="flex-shrink-0 border-b border-foreground/10 bg-foreground/[0.02] px-6 py-4">
-      <div className="grid md:grid-cols-3 gap-6 max-w-5xl">
+      <div className="grid md:grid-cols-4 gap-6 max-w-6xl">
         <div className="space-y-3">
-          <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide">Response</h3>
+          <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide">
+            Name
+          </h3>
+          <input
+            type="text"
+            value={config.name}
+            onChange={(e) => setConfig({ ...config, name: e.target.value })}
+            placeholder="Webhook name"
+            className="w-full px-3 py-1.5 text-sm bg-foreground/5 rounded border border-foreground/10 focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+
+        <div className="space-y-3">
+          <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide">
+            Response
+          </h3>
           <div className="space-y-2">
             <input
               type="number"
               value={config.response_status}
-              onChange={(e) => setConfig({ ...config, response_status: parseInt(e.target.value) })}
+              onChange={(e) =>
+                setConfig({ ...config, response_status: parseInt(e.target.value) })
+              }
               placeholder="Status Code"
-              className="w-full px-3 py-1.5 text-sm bg-foreground/5 rounded border border-foreground/10 focus:border-blue-500 focus:outline-none"
-            />
-            <input
-              type="text"
-              value={config.response_content_type}
-              onChange={(e) => setConfig({ ...config, response_content_type: e.target.value })}
-              placeholder="Content-Type"
               className="w-full px-3 py-1.5 text-sm bg-foreground/5 rounded border border-foreground/10 focus:border-blue-500 focus:outline-none"
             />
             <textarea
@@ -434,9 +569,11 @@ function ConfigPanel({ endpoint, endpointId, manageKey, onUpdate }: ConfigPanelP
             />
           </div>
         </div>
-        
+
         <div className="space-y-3">
-          <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide">Forwarding</h3>
+          <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide">
+            Forwarding
+          </h3>
           <label className="flex items-center gap-2 text-sm cursor-pointer">
             <input
               type="checkbox"
@@ -455,9 +592,11 @@ function ConfigPanel({ endpoint, endpointId, manageKey, onUpdate }: ConfigPanelP
             className="w-full px-3 py-1.5 text-sm bg-foreground/5 rounded border border-foreground/10 focus:border-blue-500 focus:outline-none disabled:opacity-40"
           />
         </div>
-        
+
         <div className="space-y-3">
-          <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide">Status</h3>
+          <h3 className="text-xs font-medium text-foreground/50 uppercase tracking-wide">
+            Status
+          </h3>
           <label className="flex items-center gap-2 text-sm cursor-pointer">
             <input
               type="checkbox"

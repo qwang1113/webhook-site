@@ -13,7 +13,7 @@ export interface Database {
         Row: {
           id: string
           created_at: string
-          manage_key_hash: string
+          user_id: string
           name: string | null
           paused: boolean
           response_status: number
@@ -29,7 +29,7 @@ export interface Database {
         Insert: {
           id?: string
           created_at?: string
-          manage_key_hash: string
+          user_id: string
           name?: string | null
           paused?: boolean
           response_status?: number
@@ -44,7 +44,7 @@ export interface Database {
         Update: {
           id?: string
           created_at?: string
-          manage_key_hash?: string
+          user_id?: string
           name?: string | null
           paused?: boolean
           response_status?: number
@@ -56,7 +56,14 @@ export interface Database {
           forward_timeout_ms?: number
           forward_add_headers?: Json
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "webhook_endpoints_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          }
+        ]
       }
       webhook_requests: {
         Row: {

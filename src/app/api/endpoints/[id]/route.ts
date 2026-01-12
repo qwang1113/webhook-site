@@ -1,64 +1,71 @@
 import { NextResponse } from 'next/server';
-import { getServerClient } from '@/lib/supabase';
-import { verifyManageKey } from '@/lib/crypto';
+import { createClient } from '@/lib/supabase/server';
 import type { UpdateEndpointRequest, WebhookEndpoint } from '@/types/database';
 import type { Database } from '@/types/supabase';
 
 type EndpointUpdate = Database['public']['Tables']['webhook_endpoints']['Update'];
-
 type RouteParams = { params: Promise<{ id: string }> };
 
+// GET /api/endpoints/[id] - Get endpoint details
 export async function GET(request: Request, { params }: RouteParams) {
   const { id } = await params;
-  const supabase = getServerClient();
-  
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { data, error } = await supabase
     .from('webhook_endpoints')
     .select('*')
     .eq('id', id)
+    .eq('user_id', user.id)
     .single();
-  
+
   if (error || !data) {
     return NextResponse.json({ error: 'Endpoint not found' }, { status: 404 });
   }
-  
-  const endpoint = data as WebhookEndpoint;
-  const { manage_key_hash: _, ...publicData } = endpoint;
-  
+
+  // Remove internal fields
+  const { user_id: _userId, ...publicData } = data;
+  void _userId;
   return NextResponse.json(publicData);
 }
 
+// PATCH /api/endpoints/[id] - Update endpoint
 export async function PATCH(request: Request, { params }: RouteParams) {
   const { id } = await params;
-  const url = new URL(request.url);
-  const key = url.searchParams.get('key');
-  
-  if (!key) {
-    return NextResponse.json({ error: 'Missing manage key' }, { status: 401 });
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  
-  const supabase = getServerClient();
-  
-  const { data: endpointData, error: fetchError } = await supabase
+
+  // Verify ownership
+  const { data: endpoint, error: fetchError } = await supabase
     .from('webhook_endpoints')
-    .select('manage_key_hash')
+    .select('id')
     .eq('id', id)
+    .eq('user_id', user.id)
     .single();
-  
-  if (fetchError || !endpointData) {
+
+  if (fetchError || !endpoint) {
     return NextResponse.json({ error: 'Endpoint not found' }, { status: 404 });
   }
-  
-  const endpointForPatch = endpointData as { manage_key_hash: string };
-  const isValid = await verifyManageKey(key, endpointForPatch.manage_key_hash);
-  if (!isValid) {
-    return NextResponse.json({ error: 'Invalid manage key' }, { status: 403 });
-  }
-  
+
   const body: UpdateEndpointRequest = await request.json();
-  
   const updateData: EndpointUpdate = {};
-  
+
   if (body.name !== undefined) updateData.name = body.name;
   if (body.paused !== undefined) updateData.paused = body.paused;
   if (body.response_status !== undefined) updateData.response_status = body.response_status;
@@ -69,62 +76,52 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   if (body.forward_url !== undefined) updateData.forward_url = body.forward_url;
   if (body.forward_timeout_ms !== undefined) updateData.forward_timeout_ms = body.forward_timeout_ms;
   if (body.forward_add_headers !== undefined) updateData.forward_add_headers = body.forward_add_headers;
-  
+
   if (Object.keys(updateData).length === 0) {
     return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
   }
-  
+
   const { data: updated, error: updateError } = await supabase
     .from('webhook_endpoints')
     .update(updateData)
     .eq('id', id)
+    .eq('user_id', user.id)
     .select('*')
     .single();
-  
+
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
-  
-  const updatedEndpoint = updated as WebhookEndpoint;
-  const { manage_key_hash: __, ...publicData } = updatedEndpoint;
+
+  const { user_id: _userId2, ...publicData } = updated as WebhookEndpoint & { user_id: string };
+  void _userId2;
   return NextResponse.json(publicData);
 }
 
+// DELETE /api/endpoints/[id] - Delete endpoint
 export async function DELETE(request: Request, { params }: RouteParams) {
   const { id } = await params;
-  const url = new URL(request.url);
-  const key = url.searchParams.get('key');
-  
-  if (!key) {
-    return NextResponse.json({ error: 'Missing manage key' }, { status: 401 });
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  
-  const supabase = getServerClient();
-  
-  const { data: endpointData2, error: fetchError } = await supabase
-    .from('webhook_endpoints')
-    .select('manage_key_hash')
-    .eq('id', id)
-    .single();
-  
-  if (fetchError || !endpointData2) {
-    return NextResponse.json({ error: 'Endpoint not found' }, { status: 404 });
-  }
-  
-  const endpointForDelete = endpointData2 as { manage_key_hash: string };
-  const isValid = await verifyManageKey(key, endpointForDelete.manage_key_hash);
-  if (!isValid) {
-    return NextResponse.json({ error: 'Invalid manage key' }, { status: 403 });
-  }
-  
+
+  // Verify ownership and delete
   const { error: deleteError } = await supabase
     .from('webhook_endpoints')
     .delete()
-    .eq('id', id);
-  
+    .eq('id', id)
+    .eq('user_id', user.id);
+
   if (deleteError) {
     return NextResponse.json({ error: deleteError.message }, { status: 500 });
   }
-  
+
   return new Response(null, { status: 204 });
 }
